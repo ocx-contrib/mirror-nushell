@@ -1,0 +1,150 @@
+extends: ../mirror-base.yml
+
+name: nushell
+
+# Logical index package `nushell/nushell` at the physical path
+# `ghcr.io/ocx-contrib/nushell/nushell` — slash segments, never hyphen-
+# flattened. The first segment must be this repo's own GitHub owner:
+# GITHUB_TOKEN only authorises packages owned by the repo the workflow runs in.
+#
+# Upstream's owner is the org `nushell` and the shipped binary is `nu`, but the
+# package names itself after the project on both segments, the way the index
+# already refers to it.
+#
+# Succeeds the flat `ocx.sh/nushell` coordinate this repository published
+# before the grouped layout.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/nushell/nushell
+
+source:
+  type: github_release
+  owner: nushell
+  repo: nushell
+  tag_pattern: "^(?P<version>\\d+\\.\\d+\\.\\d+)$"
+
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ───────────────
+#
+# Nushell is a Rust build and upstream ships BOTH a gnu and a musl tarball per
+# Linux arch. Measured on 0.114.1:
+#
+#   nu-0.114.1-x86_64-unknown-linux-musl/nu
+#     ELF 64-bit LSB pie executable, x86-64, static-pie linked
+#     no INTERP program header ; readelf -d → no NEEDED entries
+#   nu-0.114.1-aarch64-unknown-linux-musl/nu
+#     ELF 64-bit LSB executable, ARM aarch64, statically linked
+#     no INTERP program header ; readelf -d → no NEEDED entries
+#
+#   nu-0.114.1-x86_64-unknown-linux-gnu/nu
+#     dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2
+#     NEEDED: libz.so.1, libgcc_s.so.1, libm.so.6, libc.so.6
+#   nu-0.114.1-aarch64-unknown-linux-gnu/nu
+#     dynamically linked, interpreter /lib/ld-linux-aarch64.so.1
+#     NEEDED: libgcc_s.so.1, libm.so.6, libc.so.6
+#
+# The musl builds require nothing of the host, so both Linux keys are BARE —
+# no `+libc.*` suffix. The gnu builds are deliberately NOT mirrored: where
+# upstream ships both a fully-static and a dynamic build of the same thing,
+# only the static one is published — it is the strictly more portable artifact
+# and a second key would only add a host requirement. Container legs (ubuntu +
+# alpine + fedora) live in ../mirror-base.yml and are what turn the bare-key
+# claim into evidence.
+#
+# ─── Scope (verified against 0.105.0, the first in-range release, and 0.114.1)
+#
+# Upstream also publishes, and this mirror deliberately does not carry:
+#   nu-*-{armv7,loongarch64,riscv64gc}-*        — no GHA runner
+#   nu-*-{x86_64,aarch64}-unknown-linux-gnu.*   — dynamic; the musl build wins
+#   nu-*-pc-windows-msvc.msi                    — installer, not relocatable
+#   SHA256SUMS                                  — sidecar
+#
+# The anchored ^…$ regexes are what keep those out: `x86_64-unknown-linux-musl`
+# does not match the armv7 `musleabihf` tarball or the loongarch64 one, and
+# `\.zip$` does not match the `.msi`. Resolution verified BOTH ways across
+# EVERY in-range release (all 16 of 0.105.0 … 0.114.1): each of the six
+# patterns matches EXACTLY one asset.
+# A pattern matching zero is silently skipped, not an error — it would yield a
+# green run with a missing platform.
+assets:
+  linux/amd64:
+    - "^nu-.*-x86_64-unknown-linux-musl\\.tar\\.gz$"
+  linux/arm64:
+    - "^nu-.*-aarch64-unknown-linux-musl\\.tar\\.gz$"
+  darwin/amd64:
+    - "^nu-.*-x86_64-apple-darwin\\.tar\\.gz$"
+  darwin/arm64:
+    - "^nu-.*-aarch64-apple-darwin\\.tar\\.gz$"
+  windows/amd64:
+    # .zip only — the .msi is an installer, not a relocatable bundle.
+    - "^nu-.*-x86_64-pc-windows-msvc\\.zip$"
+  windows/arm64:
+    - "^nu-.*-aarch64-pc-windows-msvc\\.zip$"
+
+asset_type:
+  # Unix tarballs wrap everything in a versioned dir (nu-<v>-<target>/nu);
+  # the Windows zips are flat (nu.exe at the archive root).
+  default:
+    type: archive
+    strip_components: 1
+  platforms:
+    windows/amd64:
+      type: archive
+      strip_components: 0
+    windows/arm64:
+      type: archive
+      strip_components: 0
+
+# ─── The `binaries` claim — hand-listed as ["nu"], deliberately ─────────────
+#
+# Upstream's release-pkg.nu globs `nu*`, so the archive root carries far more
+# than the shell. Measured on 0.114.1:
+#
+#   unix tarball (after strip 1):  nu, nu_plugin_{custom_values,example,
+#     formats,gstat,inc,polars,query,stress_internals}, LICENSE, README.txt
+#   windows zip (flat):            the same set as .exe, PLUS less.exe and
+#     LICENSE-for-less.txt
+#
+# `binaries` declares the package's INTERFACE, and that interface is `nu`. The
+# nu_plugin_* executables are loaded by nu itself via `plugin add`, never
+# invoked by a user; `less.exe` is a vendored pager and is Windows-only, so
+# listing the full tree would also force a per-platform metadata split for a
+# name nobody calls. One name, one metadata file, one honest claim.
+#
+# What this does NOT do is hide them from PATH: the bundle's only interface
+# entry is a bare `${installPath}` (the content root IS the bin dir after
+# strip), so every sibling executable is on PATH regardless of this list.
+# That same bare-`${installPath}` shape is why ../mirror-base.yml sets
+# `bin_scan: off` — the scan walks only `${installPath}/<dir>`, so `verify`
+# would have an empty scope, and an absent declared name is legal under
+# verify. It would pass green without reading the tree; `off` at least does
+# not claim a check it never performed.
+metadata:
+  default: metadata.json
+
+catalog:
+  logo: logo.svg
+
+versions:
+  # 0.105.0 is the floor: every platform pattern above resolves at it, so no
+  # mirrored version publishes a silently short platform set.
+  min: "0.105.0"
+  new_per_run: 5
+  poll_interval: "0 */6 * * *"
+
+tests:
+  # `script:` resolves from the REPOSITORY ROOT — unlike `metadata.default`
+  # and `catalog.logo` above, which resolve against this spec's own directory.
+  - name: smoke
+    script: nushell/tests/smoke.star
+
+annotations:
+  # From the Phase 1.5 license gate:
+  #   $ gh api repos/nushell/nushell/license --jq '.license.spdx_id'
+  #   MIT
+  org.opencontainers.image.licenses: "MIT"
+
+announce:
+  # Spelled out, not derived from target.repository — the logical name and the
+  # physical path are related by convention only.
+  package: nushell/nushell
+  fork: ocx-contrib/index
