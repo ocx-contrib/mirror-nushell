@@ -6,7 +6,7 @@ name: nushell
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '40 2-23/6 * * *'
   workflow_dispatch:
   push:
     branches: [main]
